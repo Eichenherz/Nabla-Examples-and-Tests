@@ -62,6 +62,9 @@ void main()
 			// load vertex data
 			vec3 geomNormal;
 			const vec3 lastVxPos = load_positions(geomNormal,batchInstanceData,indices);
+            const vec3 origin = dPdBary*compactBary+lastVxPos;
+            
+            contrib.motionVector = origin;
 
 			// little optimization for non-twosided materials
 			if (material.genchoice_count!=0u)
@@ -77,7 +80,6 @@ void main()
 					#endif
 				);
 			
-				const vec3 origin = dPdBary*compactBary+lastVxPos;
 				normalizedV = normalize(pc.cummon.viewDirReconFactors[3]-origin);
 
 				// generate rays
@@ -85,7 +87,7 @@ void main()
 				rayMask = generate_next_rays(
 					samplesPerPixelPerDispatch,material,frontfacing,vertex_depth,
 					scramble_start_state,pc.cummon.frameLowDiscrepancySequenceShift,outPixelLocation,origin,
-					vec3(pc.cummon.rcpFramesDispatched),1.f,contrib.albedo,contrib.worldspaceNormal
+					vec3(pc.cummon.rcpFramesDispatched),1.f,contrib.albedo,contrib.worldspaceNormal,contrib.motionVector
 				);
 			}
 			else
@@ -132,11 +134,13 @@ void main()
 				{
 					storeAlbedo(contrib.albedo,coord);
 					storeWorldspaceNormal(contrib.worldspaceNormal,coord);
+					storeMotionVector(contrib.motionVector,coord);
 				}
 				else
 				{
 					addAlbedo(contrib.albedo,coord,pc.cummon.rcpFramesDispatched);
 					addWorldspaceNormal(contrib.worldspaceNormal,coord,pc.cummon.rcpFramesDispatched);
+					// addMotionVector(contrib.motionVector,coord,pc.cummon.rcpFramesDispatched);
 				}
 			}
 		}

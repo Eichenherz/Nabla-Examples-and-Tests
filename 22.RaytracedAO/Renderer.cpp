@@ -51,7 +51,7 @@ Renderer::Renderer(IVideoDriver* _driver, IAssetManager* _assetManager, scene::I
 		m_rrManager(ext::RadeonRays::Manager::create(m_driver)),
 		m_prevView(), m_prevCamTform(), m_sceneBound(FLT_MAX,FLT_MAX,FLT_MAX,-FLT_MAX,-FLT_MAX,-FLT_MAX), m_maxAreaLightLuma(0.f),
 		m_framesDispatched(0u), m_rcpPixelSize{0.f,0.f},
-		m_staticViewData{ {0u,0u},0u,0u,0u,0u,core::infinity<float>(),{}}, m_raytraceCommonData{0.f,0u,0u,0u,core::matrix3x4SIMD()},
+		m_staticViewData{ {0u,0u},0u,0u,0u,0u,core::infinity<float>(),{}}, m_raytraceCommonData{0.f,0u,0u,0u,core::matrix3x4SIMD(),core::matrix4SIMD() },
 		m_indirectDrawBuffers{nullptr},m_cullPushConstants{core::matrix4SIMD(),1.f,0u,0u,0u},m_cullWorkGroups(0u),
 		m_raygenWorkGroups{0u,0u},m_visibilityBuffer(nullptr),m_colorBuffer(nullptr),
 		m_envMapImportanceSampling(_driver)
@@ -117,8 +117,8 @@ Renderer::Renderer(IVideoDriver* _driver, IAssetManager* _assetManager, scene::I
 	}
 	
 	{
-		constexpr auto raytracingCommonDescriptorCount = 10u;
-		IGPUDescriptorSetLayout::SBinding bindings[raytracingCommonDescriptorCount];
+		constexpr auto raytracingCommonDescriptorCount = 11u;
+		IGPUDescriptorSetLayout::SBinding bindings[raytracingCommonDescriptorCount] = {};
 		fillIotaDescriptorBindingDeclarations(bindings,ISpecializedShader::ESS_COMPUTE,raytracingCommonDescriptorCount);
 		bindings[0].type = asset::EDT_UNIFORM_BUFFER;
 		bindings[1].type = asset::EDT_UNIFORM_TEXEL_BUFFER;
@@ -127,9 +127,10 @@ Renderer::Renderer(IVideoDriver* _driver, IAssetManager* _assetManager, scene::I
 		bindings[4].type = asset::EDT_STORAGE_BUFFER;
 		bindings[5].type = asset::EDT_STORAGE_IMAGE;
 		bindings[6].type = asset::EDT_STORAGE_IMAGE;
-		bindings[7].type = asset::EDT_COMBINED_IMAGE_SAMPLER;
+		bindings[7].type = asset::EDT_STORAGE_IMAGE;
 		bindings[8].type = asset::EDT_COMBINED_IMAGE_SAMPLER;
 		bindings[9].type = asset::EDT_COMBINED_IMAGE_SAMPLER;
+		bindings[10].type = asset::EDT_COMBINED_IMAGE_SAMPLER;
 		m_commonRaytracingDSLayout = m_driver->createGPUDescriptorSetLayout(bindings,bindings+raytracingCommonDescriptorCount);
 	}
 
@@ -158,10 +159,11 @@ Renderer::Renderer(IVideoDriver* _driver, IAssetManager* _assetManager, scene::I
 		m_closestHitDSLayout = m_driver->createGPUDescriptorSetLayout(bindings,bindings+closestHitDescriptorCount);
 	}
 	{
-		constexpr auto resolveDescriptorCount = 7u;
+		constexpr auto resolveDescriptorCount = 9u;
 		IGPUDescriptorSetLayout::SBinding bindings[resolveDescriptorCount];
 		fillIotaDescriptorBindingDeclarations(bindings,ISpecializedShader::ESS_COMPUTE,resolveDescriptorCount);
-		bindings[0].type = asset::EDT_UNIFORM_BUFFER;
+		bindings[0].type = asset::EDT_COMBINED_IMAGE_SAMPLER;
+		bindings[0].samplers = &sampler;
 		bindings[1].type = asset::EDT_COMBINED_IMAGE_SAMPLER;
 		bindings[1].samplers = &sampler;
 		bindings[2].type = asset::EDT_COMBINED_IMAGE_SAMPLER;
@@ -171,7 +173,8 @@ Renderer::Renderer(IVideoDriver* _driver, IAssetManager* _assetManager, scene::I
 		bindings[4].type = asset::EDT_STORAGE_IMAGE;
 		bindings[5].type = asset::EDT_STORAGE_IMAGE;
 		bindings[6].type = asset::EDT_STORAGE_IMAGE;
-
+		bindings[7].type = asset::EDT_STORAGE_IMAGE;
+		bindings[8].type = asset::EDT_UNIFORM_BUFFER;
 		m_resolveDSLayout = m_driver->createGPUDescriptorSetLayout(bindings,bindings+resolveDescriptorCount);
 	}
 }
@@ -791,7 +794,7 @@ void Renderer::initSceneNonAreaLights(Renderer::InitializationData& initData)
 				writes[i].count = 1u;
 				writes[i].info = infos.get()+i;
 			}
-			writes[0].descriptorType = EDT_UNIFORM_BUFFER;
+			writes[0].descriptorType = EDT_STORAGE_BUFFER;
 			writes[1].descriptorType = EDT_STORAGE_IMAGE;
 			writes[2].descriptorType = EDT_COMBINED_IMAGE_SAMPLER;
 			writes[2].count = envMapCPUImages.size();
@@ -821,7 +824,7 @@ void Renderer::initSceneNonAreaLights(Renderer::InitializationData& initData)
 				pInfoEnvmap++;
 			}
 
-			m_driver->updateDescriptorSets(BindingCount,writes,0u,nullptr);
+			m_driver->updateDescriptorSets(BindingCount - (envMapCPUImages.empty() ? 1 : 0), writes, 0u, nullptr);
 		}
 
 		m_driver->bindComputePipeline(pipeline.get());
@@ -1164,7 +1167,7 @@ void Renderer::deinitSceneResources()
 	m_indirectDrawBuffers[1] = m_indirectDrawBuffers[0] = nullptr;
 	m_indexBuffer = nullptr;
 
-	m_raytraceCommonData = { 0.f,0u,0u,0u,core::matrix3x4SIMD() };
+	m_raytraceCommonData = { 0.f,0u,0u,0u,core::matrix3x4SIMD(),core::matrix4SIMD() };
 	m_sceneBound = core::aabbox3df(FLT_MAX, FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX, -FLT_MAX);
 	m_maxAreaLightLuma = 0.f;
 	
@@ -1360,13 +1363,15 @@ void Renderer::initScreenSizedResources(
 	m_accumulation = createScreenSizedTexture(EF_R32G32_UINT,(cascadeCount+1u)*m_staticViewData.samplesPerPixelPerDispatch); // one more (first) layer because of accumulation metadata for a path
 	m_albedoAcc = createScreenSizedTexture(EF_R32_UINT,m_staticViewData.samplesPerPixelPerDispatch);
 	m_normalAcc = createScreenSizedTexture(EF_R32_UINT,m_staticViewData.samplesPerPixelPerDispatch);
+	m_mvAcc = createScreenSizedTexture(EF_R32_UINT,m_staticViewData.samplesPerPixelPerDispatch);
 	m_tonemapOutput = createScreenSizedTexture(EF_R16G16B16A16_SFLOAT);
 	m_albedoRslv = createScreenSizedTexture(EF_A2B10G10R10_UNORM_PACK32);
 	m_normalRslv = createScreenSizedTexture(EF_R16G16B16A16_SFLOAT);
+	m_mvRslv = createScreenSizedTexture(EF_R16G16B16A16_SFLOAT);
 
-	constexpr uint32_t MaxDescritorUpdates = 10u;
-	IGPUDescriptorSet::SDescriptorInfo infos[MaxDescritorUpdates];
-	IGPUDescriptorSet::SWriteDescriptorSet writes[MaxDescritorUpdates];
+	constexpr uint32_t MaxDescritorUpdates = 11u;
+	IGPUDescriptorSet::SDescriptorInfo infos[MaxDescritorUpdates] = {};
+	IGPUDescriptorSet::SWriteDescriptorSet writes[MaxDescritorUpdates] = {};
 	
 	auto warpMap = m_envMapImportanceSampling.getWarpMapImageView();
 	auto lumaMap = m_envMapImportanceSampling.getLuminanceImageView();
@@ -1381,20 +1386,21 @@ void Renderer::initScreenSizedResources(
 		setImageInfo(infos+2,asset::EIL_GENERAL,core::smart_refctd_ptr(m_accumulation));
 		setImageInfo(infos+5,asset::EIL_GENERAL,core::smart_refctd_ptr(m_albedoAcc));
 		setImageInfo(infos+6,asset::EIL_GENERAL,core::smart_refctd_ptr(m_normalAcc));
-
+		setImageInfo(infos+7,asset::EIL_GENERAL,core::smart_refctd_ptr(m_mvAcc));
+        
 		// envmap
 		{
-			setImageInfo(infos+7,asset::EIL_GENERAL,core::smart_refctd_ptr(m_finalEnvmap));
-			ISampler::SParams samplerParams = { ISampler::ETC_REPEAT, ISampler::ETC_CLAMP_TO_EDGE, ISampler::ETC_CLAMP_TO_EDGE, ISampler::ETBC_FLOAT_OPAQUE_BLACK, ISampler::ETF_LINEAR, ISampler::ETF_LINEAR, ISampler::ESMM_LINEAR, 0u, false, ECO_ALWAYS };
-			infos[7].image.sampler = m_driver->createGPUSampler(samplerParams);
-			infos[7].image.imageLayout = EIL_SHADER_READ_ONLY_OPTIMAL;
-		}
-		// warpmap
-		{
-			setImageInfo(infos+8,asset::EIL_GENERAL,core::smart_refctd_ptr(warpMap));
+			setImageInfo(infos+8,asset::EIL_GENERAL,core::smart_refctd_ptr(m_finalEnvmap));
 			ISampler::SParams samplerParams = { ISampler::ETC_REPEAT, ISampler::ETC_CLAMP_TO_EDGE, ISampler::ETC_CLAMP_TO_EDGE, ISampler::ETBC_FLOAT_OPAQUE_BLACK, ISampler::ETF_LINEAR, ISampler::ETF_LINEAR, ISampler::ESMM_LINEAR, 0u, false, ECO_ALWAYS };
 			infos[8].image.sampler = m_driver->createGPUSampler(samplerParams);
 			infos[8].image.imageLayout = EIL_SHADER_READ_ONLY_OPTIMAL;
+		}
+		// warpmap
+		{
+			setImageInfo(infos+9,asset::EIL_GENERAL,core::smart_refctd_ptr(warpMap));
+			ISampler::SParams samplerParams = { ISampler::ETC_REPEAT, ISampler::ETC_CLAMP_TO_EDGE, ISampler::ETC_CLAMP_TO_EDGE, ISampler::ETBC_FLOAT_OPAQUE_BLACK, ISampler::ETF_LINEAR, ISampler::ETF_LINEAR, ISampler::ESMM_LINEAR, 0u, false, ECO_ALWAYS };
+			infos[9].image.sampler = m_driver->createGPUSampler(samplerParams);
+			infos[9].image.imageLayout = EIL_SHADER_READ_ONLY_OPTIMAL;
 		}
 		
 		IGPUDescriptorSet::SDescriptorInfo luminanceDescriptorInfo = {};
@@ -1414,7 +1420,7 @@ void Renderer::initScreenSizedResources(
 		for (auto i=0u; i<2u; i++)
 			m_commonRaytracingDS[i] = m_driver->createGPUDescriptorSet(core::smart_refctd_ptr(m_commonRaytracingDSLayout));
 
-		constexpr auto descriptorUpdateCount = 10u;
+		constexpr auto descriptorUpdateCount = 11u;
 		setDstSetAndDescTypesOnWrites(m_commonRaytracingDS[0].get(),writes,infos,{
 			EDT_UNIFORM_BUFFER,
 			EDT_UNIFORM_TEXEL_BUFFER,
@@ -1423,17 +1429,18 @@ void Renderer::initScreenSizedResources(
 			EDT_STORAGE_BUFFER,
 			EDT_STORAGE_IMAGE,
 			EDT_STORAGE_IMAGE,
+			EDT_STORAGE_IMAGE,
 			EDT_COMBINED_IMAGE_SAMPLER,
 			EDT_COMBINED_IMAGE_SAMPLER,
 		});
 		
 		// Set last write
-		writes[9].binding = 9u;
-		writes[9].arrayElement = 0u;
-		writes[9].count = 1u;
-		writes[9].descriptorType = EDT_COMBINED_IMAGE_SAMPLER;
-		writes[9].dstSet = m_commonRaytracingDS[0].get();
-		writes[9].info = &luminanceDescriptorInfo;
+		writes[10].binding = 9u;
+		writes[10].arrayElement = 0u;
+		writes[10].count = 1u;
+		writes[10].descriptorType = EDT_COMBINED_IMAGE_SAMPLER;
+		writes[10].dstSet = m_commonRaytracingDS[0].get();
+		writes[10].info = &luminanceDescriptorInfo;
 
 		m_driver->updateDescriptorSets(descriptorUpdateCount,writes,0u,nullptr);
 		// set up second DS
@@ -1499,17 +1506,18 @@ void Renderer::initScreenSizedResources(
 
 	// set up m_resolveDS
 	{
-		infos[0].buffer = {0u,_staticViewDataBuffer->getSize()};
-		infos[0].desc = std::move(_staticViewDataBuffer);
-		setImageInfo(infos+1,asset::EIL_GENERAL,core::smart_refctd_ptr(m_accumulation));
+		infos[8].buffer = {0u,_staticViewDataBuffer->getSize()};
+		infos[8].desc = std::move(_staticViewDataBuffer);
+		setImageInfo(infos+0,asset::EIL_GENERAL,core::smart_refctd_ptr(m_accumulation));
 		core::smart_refctd_ptr<IGPUImageView> albedoSamplerView;
 		{
 			IGPUImageView::SCreationParams viewparams = m_albedoAcc->getCreationParameters();
 			viewparams.format = EF_A2B10G10R10_UNORM_PACK32;
 			albedoSamplerView = m_driver->createGPUImageView(std::move(viewparams));
 		}
-		setImageInfo(infos+2,asset::EIL_GENERAL,std::move(albedoSamplerView));
-		setImageInfo(infos+3,asset::EIL_GENERAL,core::smart_refctd_ptr(m_normalAcc));
+		setImageInfo(infos+1,asset::EIL_GENERAL,std::move(albedoSamplerView));
+		setImageInfo(infos+2,asset::EIL_GENERAL,core::smart_refctd_ptr(m_normalAcc));
+		setImageInfo(infos+3,asset::EIL_GENERAL,core::smart_refctd_ptr(m_mvAcc));
 		setImageInfo(infos+4,asset::EIL_GENERAL,core::smart_refctd_ptr(m_tonemapOutput));
 		core::smart_refctd_ptr<IGPUImageView> albedoStorageView;
 		{
@@ -1519,14 +1527,21 @@ void Renderer::initScreenSizedResources(
 		}
 		setImageInfo(infos+5,asset::EIL_GENERAL,std::move(albedoStorageView));
 		setImageInfo(infos+6,asset::EIL_GENERAL,core::smart_refctd_ptr(m_normalRslv));
+		setImageInfo(infos+7,asset::EIL_GENERAL,core::smart_refctd_ptr(m_mvRslv));
 				
 		setDstSetAndDescTypesOnWrites(m_resolveDS.get(),writes,infos,{
+			EDT_COMBINED_IMAGE_SAMPLER,
+			EDT_COMBINED_IMAGE_SAMPLER,
+			EDT_COMBINED_IMAGE_SAMPLER,
+			EDT_COMBINED_IMAGE_SAMPLER,
+			EDT_STORAGE_IMAGE,
+			EDT_STORAGE_IMAGE,
+			EDT_STORAGE_IMAGE,
+			EDT_STORAGE_IMAGE,
 			EDT_UNIFORM_BUFFER,
-			EDT_COMBINED_IMAGE_SAMPLER,EDT_COMBINED_IMAGE_SAMPLER,EDT_COMBINED_IMAGE_SAMPLER,
-			EDT_STORAGE_IMAGE,EDT_STORAGE_IMAGE,EDT_STORAGE_IMAGE
 		});
 	}
-	m_driver->updateDescriptorSets(7u,writes,0u,nullptr);
+	m_driver->updateDescriptorSets(9u,writes,0u,nullptr);
 
 	m_visibilityBuffer = m_driver->addFrameBuffer();
 	m_visibilityBuffer->attach(EFAP_DEPTH_ATTACHMENT,createScreenSizedTexture(EF_D32_SFLOAT));
@@ -1574,7 +1589,7 @@ void Renderer::deinitScreenSizedResources()
 	m_accumulation = m_tonemapOutput = nullptr;
 	m_albedoAcc = m_albedoRslv = nullptr;
 	m_normalAcc = m_normalRslv = nullptr;
-
+	m_mvAcc	= m_mvRslv = nullptr;
 	glFinish();
 	
 	// wait for OpenCL to finish
@@ -1639,6 +1654,8 @@ void Renderer::takeAndSaveScreenShot(const std::filesystem::path& screenshotFile
 		ext::ScreenShot::createScreenShot(m_driver,m_assetManager,m_albedoRslv.get(),filename_wo_ext.string()+"_albedo.exr",format);
 	if (m_normalRslv)
 		ext::ScreenShot::createScreenShot(m_driver,m_assetManager,m_normalRslv.get(),filename_wo_ext.string()+"_normal.exr",format);
+	if (m_mvRslv)
+		ext::ScreenShot::createScreenShot(m_driver, m_assetManager, m_mvRslv.get(), filename_wo_ext.string() + "_motion_vector.exr", format);
 
 	if(denoise)
 	{
@@ -1763,7 +1780,7 @@ void Renderer::denoiseCubemapFaces(
 // one day it will just work like that
 //#include <nbl/builtin/glsl/sampling/box_muller_transform.glsl>
 
-bool Renderer::render(nbl::ITimer* timer, const float kappa, const float Emin, const bool transformNormals, const bool beauty)
+bool Renderer::render(nbl::ITimer* timer, nbl::core::matrix4SIMD const& prevVP, const float kappa, const float Emin, const bool transformNormals, const bool beauty)
 {
 	if (m_cullPushConstants.maxGlobalInstanceCount==0u)
 		return true;
@@ -1771,7 +1788,7 @@ bool Renderer::render(nbl::ITimer* timer, const float kappa, const float Emin, c
 	auto camera = m_smgr->getActiveCamera();
 	camera->OnAnimate(std::chrono::duration_cast<std::chrono::milliseconds>(timer->getTime()).count());
 	camera->render();
-
+    
 	// check if camera moved
 	{
 		auto properEquals = [](const core::matrix4x3& lhs, const core::matrix4x3& rhs) -> bool
@@ -1906,6 +1923,10 @@ bool Renderer::render(nbl::ITimer* timer, const float kappa, const float Emin, c
 		// prepare camera data for raytracing
 		viewDirReconFactorsT.rows[3] = core::vectorSIMDf().set(camera->getAbsolutePosition());
 		m_raytraceCommonData.viewDirReconFactors = core::transpose(viewDirReconFactorsT).extractSub3x4();
+		core::matrix4SIMD inverseCur;
+		m_cullPushConstants.viewProjMatrix.getInverseTransform(inverseCur);
+		m_raytraceCommonData.Prev_MVP = core::concatenateBFollowedByA(prevVP, inverseCur);
+		
 	}
 	// raygen
 	{

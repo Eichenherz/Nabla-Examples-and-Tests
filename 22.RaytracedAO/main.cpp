@@ -531,7 +531,7 @@ int main(int argc, char** argv)
 		float Emin = 0.05f;
 		bool envmap = false;
 		float envmapRegFactor = 0.0f;
-
+		core::matrix4SIMD prev{};
 		scene::CSceneNodeAnimatorCameraModifiedMaya* getInteractiveCameraAnimator()
 		{
 			return reinterpret_cast<scene::CSceneNodeAnimatorCameraModifiedMaya*>(interactiveCamera->getAnimators()[0]);
@@ -614,8 +614,8 @@ int main(int argc, char** argv)
 
 	auto extractAndAddToSensorData = [&](const ext::MitsubaLoader::CElementSensor& sensor, uint32_t idx) -> bool
 	{
-		SensorData mainSensorData = {};
-
+		SensorData mainSensorData = { };
+		mainSensorData.prev = sensor.previousTransform;
 		const auto& film = sensor.film;
 		mainSensorData.denoiserInfo.bloomFilePath = std::filesystem::path(film.denoiserBloomFilePath);
 		mainSensorData.denoiserInfo.bloomScale = film.denoiserBloomScale;
@@ -1087,7 +1087,7 @@ int main(int argc, char** argv)
 
 				driver->beginScene(false, false);
 
-				if(!renderer->render(device->getTimer(),sensor.kappa,sensor.Emin,!sensor.envmap))
+				if(!renderer->render(device->getTimer(),sensor.prev,sensor.kappa,sensor.Emin,!sensor.envmap))
 				{
 					renderFailed = true;
 					driver->endScene();
@@ -1261,6 +1261,7 @@ int main(int argc, char** argv)
 			driver->beginScene(false, false);
 			if(!renderer->render(
 					device->getTimer(),
+					activeSensor != -1 ? sensors[activeSensor].prev : core::matrix4SIMD(),
 					activeSensor!=-1 ? sensors[activeSensor].kappa:0.f,
 					activeSensor!=-1 ? sensors[activeSensor].Emin:0.f,
 					true,receiver.isRenderingBeauty()

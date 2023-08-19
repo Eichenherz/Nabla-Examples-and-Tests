@@ -126,7 +126,8 @@ struct RaytraceShaderCommonData_t
 	// need to be at the end because of some PC -> OpenGL Uniform mapping bug
 	// mat3(viewDirReconFactors)*vec3(uv,1) or hitPoint-viewDirReconFactors[3]
 	mat4x3	viewDirReconFactors;
-
+	mat4	Prev_MVP;
+    
 #ifdef __cplusplus
 	uint32_t getPathDepth() const
 	{

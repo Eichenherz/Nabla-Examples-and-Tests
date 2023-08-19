@@ -44,10 +44,11 @@ layout(set = 2, binding = 4) restrict coherent buffer RayCount // maybe remove c
 // aovs
 layout(set = 2, binding = 5, r32ui) restrict uniform uimage2DArray albedoAOV;
 layout(set = 2, binding = 6, r32ui) restrict uniform uimage2DArray normalAOV;
+layout(set = 2, binding = 7, r32ui) restrict uniform uimage2DArray motionVectorAOV;
 // environment emitter
-layout(set = 2, binding = 7) uniform sampler2D envMap;
-layout(set = 2, binding = 8) uniform sampler2D warpMap; 
-layout(set = 2, binding = 9) uniform sampler2D luminance;
+layout(set = 2, binding = 8) uniform sampler2D envMap;
+layout(set = 2, binding = 9) uniform sampler2D warpMap; 
+layout(set = 2, binding = 10) uniform sampler2D luminance;
 
 void clear_raycount()
 {
@@ -124,55 +125,87 @@ void addAccumulationCascade(in vec3 weightedDelta, uvec3 coord, in uint samplesP
 	}
 }
 
-void storeAlbedo(in vec3 color, in uvec3 coord)
+vec3 loadAOV(in uvec3 coord, in int AOV)
 {
-	const uint data = nbl_glsl_encodeRGB10A2_UNORM(vec4(color,1.f));
-	imageStore(albedoAOV,ivec3(coord),uvec4(data,0u,0u,0u));
+    switch(AOV)
+    {
+        case 0: return nbl_glsl_decodeRGB10A2_UNORM(imageLoad(albedoAOV,ivec3(coord)).r).rgb;
+        case 1: return nbl_glsl_decodeRGB10A2_UNORM(imageLoad(normalAOV,ivec3(coord)).r).rgb;
+        case 2: return nbl_glsl_decodeRGB10A2_UNORM(imageLoad(motionVectorAOV,ivec3(coord)).r).rgb;
+    }
 }
-void impl_addAlbedo(vec3 delta, in uvec3 coord, in float rcpN, in bool newSample)
+
+void storeAOV(in vec3 value, in uvec3 coord, in int AOV)
 {
-	const uint data = imageLoad(albedoAOV,ivec3(coord)).r;
-	const vec3 prev = nbl_glsl_decodeRGB10A2_UNORM(data).rgb;
+	const uvec4 data = uvec4(nbl_glsl_encodeRGB10A2_UNORM(vec4(value,1.f)), 0, 0, 0);
+    switch(AOV)
+    {
+        case 0: imageStore(albedoAOV,ivec3(coord),data); break;
+        case 1: imageStore(normalAOV,ivec3(coord),data); break;
+        case 2: imageStore(motionVectorAOV,ivec3(coord),data); break;
+    }
+}
+
+void impl_addAOV(vec3 delta, in uvec3 coord, in float rcpN, in bool newSample, int AOV)
+{
+	const vec3 prev = loadAOV(coord, AOV);
 	if (newSample)
 		delta = (delta-prev)*rcpN;
 	if (any(greaterThan(abs(delta),vec3(1.f/1024.f))))
-		storeAlbedo(prev+delta,coord);
+		storeAOV(prev+delta,coord,AOV);
 }
+
+void storeAlbedo(in vec3 color, in uvec3 coord)
+{
+    storeAOV(color, coord, 0);
+}
+
 // for starting a new sample
 void addAlbedo(vec3 delta, in uvec3 coord, in float rcpN)
 {
-	impl_addAlbedo(delta,coord,rcpN,true);
+    impl_addAOV(delta, coord, rcpN, true, 0);
 }
+
 // for adding to the last sample
 void addAlbedo(vec3 delta, in uvec3 coord)
 {
-	impl_addAlbedo(delta,coord,0.f,false);
+    impl_addAOV(delta, coord, 0.f, false, 0);
 }
 
 void storeWorldspaceNormal(in vec3 normal, in uvec3 coord)
 {
-	const uint data = nbl_glsl_encodeRGB10A2_SNORM(vec4(normal,1.f));
-	imageStore(normalAOV,ivec3(coord),uvec4(data,0u,0u,0u));
+    storeAOV(normal, coord, 1);
 }
-void impl_addWorldspaceNormal(vec3 delta, in uvec3 coord, in float rcpN, in bool newSample)
-{
-	const uint data = imageLoad(normalAOV,ivec3(coord)).r;
-	const vec3 prev = nbl_glsl_decodeRGB10A2_SNORM(data).rgb;
-	if (newSample)
-		delta = (delta-prev)*rcpN;
-	if (any(greaterThan(abs(delta),vec3(1.f/512.f))))
-		storeWorldspaceNormal(prev+delta,coord);
-}
+
 // for starting a new sample
 void addWorldspaceNormal(vec3 delta, in uvec3 coord, in float rcpN)
 {
-	impl_addWorldspaceNormal(delta,coord,rcpN,true);
+    impl_addAOV(delta, coord, rcpN, true, 1);
 }
 // for adding to the last sample
 void addWorldspaceNormal(vec3 delta, in uvec3 coord)
 {
-	impl_addWorldspaceNormal(delta,coord,0.f,false);
+    impl_addAOV(delta, coord, 0.f, false, 1);
 }
+
+// Motion Vector
+void storeMotionVector(in vec3 motionVector, in uvec3 coord)
+{
+    storeAOV(motionVector, coord, 2);
+}
+
+// for starting a new sample
+void addMotionVector(vec3 delta, in uvec3 coord, in float rcpN)
+{
+    impl_addAOV(delta, coord, rcpN, true, 2);
+}
+// for adding to the last sample
+void addMotionVector(vec3 delta, in uvec3 coord)
+{
+    impl_addAOV(delta, coord, 0.f, false, 2);
+}
+
+//////////////
 
 // due to memory limitations we can only do 6k renders
 // so that's 13 bits for width, 12 bits for height, which leaves us with 7 bits for throughput
@@ -450,7 +483,7 @@ nbl_glsl_MC_quot_pdf_aov_t gen_sample_ray(
 uint generate_next_rays(
 	in uint maxRaysToGen, in nbl_glsl_MC_oriented_material_t material, in bool frontfacing, in uint vertex_depth,
 	nbl_glsl_xoroshiro64star_state_t scramble_state, in uint sampleID, in uvec2 outPixelLocation,
-	in vec3 origin, in vec3 prevThroughput, in float prevAoVThroughputScale, inout vec3 albedo, out vec3 worldspaceNormal)
+	in vec3 origin, in vec3 prevThroughput, in float prevAoVThroughputScale, inout vec3 albedo, out vec3 worldspaceNormal, out vec3 motionVector)
 {
 	// get material streams as well
 	const nbl_glsl_MC_instr_stream_t gcs = nbl_glsl_MC_oriented_material_t_getGenChoiceStream(material);
@@ -460,6 +493,7 @@ uint generate_next_rays(
 	// need to do this after we have worldspace V and N ready
 	const nbl_glsl_MC_precomputed_t precomputed = nbl_glsl_MC_precomputeData(frontfacing);
 	worldspaceNormal = precomputed.N*nbl_glsl_MC_colorToScalar(albedo);
+    motionVector = vec3(0);
 #ifdef NORM_PRECOMP_STREAM
 	const nbl_glsl_MC_instr_stream_t nps = nbl_glsl_MC_oriented_material_t_getNormalPrecompStream(material);
 	nbl_glsl_MC_runNormalPrecompStream(nps,precomputed);
@@ -484,6 +518,7 @@ uint generate_next_rays(
 			const nbl_glsl_MC_quot_pdf_aov_t result = gen_sample_ray(direction[i],scramble_keys,sampleID+i,vertex_depth,precomputed,gcs,rnps);
 			albedo += result.aov.albedo/float(maxRaysToGen);
 			worldspaceNormal += result.aov.normal/float(maxRaysToGen);
+			motionVector += result.aov.motionVector/float(maxRaysToGen);
 
 			nextThroughput[i] = prevThroughput*result.quotient;
 			// TODO: add some sort of factor to this inequality that could account for highest possible emission (direct or indirect) we could encounter
@@ -549,6 +584,7 @@ struct Contribution
 	vec3 color;
 	vec3 albedo;
 	vec3 worldspaceNormal;
+	vec3 motionVector;
 };
 
 void Contribution_initMiss(out Contribution contrib, in float aovThroughputScale)
@@ -559,6 +595,7 @@ void Contribution_initMiss(out Contribution contrib, in float aovThroughputScale
 	const float bias = 0.f;//0.0625f*(1.f-aovThroughputScale)*pow(pc.cummon.rcpFramesDispatched,0.08f);
 	contrib.albedo = contrib.color = textureGrad(envMap, uv, vec2(bias*0.5,0.f), vec2(0.f,bias)).rgb;
 	contrib.worldspaceNormal = normalizedV;
+	contrib.motionVector = normalizedV;
 }
 
 void Contribution_normalizeAoV(inout Contribution contrib)
@@ -566,5 +603,6 @@ void Contribution_normalizeAoV(inout Contribution contrib)
 	// could do some other normalization factor, whats important is that albedo looks somewhat like the HDR value, albeit scaled down
 	contrib.albedo = contrib.albedo/max(max(contrib.albedo.r,contrib.albedo.g),max(contrib.albedo.b,1.f));
 	contrib.worldspaceNormal *= inversesqrt(max(dot(contrib.worldspaceNormal,contrib.worldspaceNormal),1.f));
+	contrib.motionVector *= inversesqrt(max(dot(contrib.motionVector,contrib.motionVector),1.f));
 }
 #endif

@@ -66,7 +66,7 @@ class Renderer : public nbl::core::IReferenceCounted, public nbl::core::Interfac
 			int32_t cropOffsetX, int32_t cropOffsetY, int32_t cropWidth, int32_t cropHeight,
 			const DenoiserArgs& denoiserArgs = {});
 
-		bool render(nbl::ITimer* timer, const float kappa, const float Emin, const bool transformNormals, const bool beauty=true);
+		bool render(nbl::ITimer* timer, nbl::core::matrix4SIMD const& prevVP, const float kappa, const float Emin, const bool transformNormals, const bool beauty=true);
 
 		auto* getColorBuffer() { return m_colorBuffer; }
 
@@ -246,6 +246,7 @@ class Renderer : public nbl::core::IReferenceCounted, public nbl::core::Interfac
 		nbl::core::smart_refctd_ptr<nbl::video::IGPUImageView> m_accumulation,m_tonemapOutput;
 		nbl::core::smart_refctd_ptr<nbl::video::IGPUImageView> m_albedoAcc,m_albedoRslv;
 		nbl::core::smart_refctd_ptr<nbl::video::IGPUImageView> m_normalAcc,m_normalRslv;
+		nbl::core::smart_refctd_ptr<nbl::video::IGPUImageView> m_mvAcc,m_mvRslv;
 		nbl::video::IFrameBuffer* m_visibilityBuffer,* m_colorBuffer;
 		
 		// Resources used for envmap sampling

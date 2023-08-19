@@ -30,5 +30,9 @@ void main()
     
     const vec3 modelPos = nbl_glsl_fetchVtxPos(gl_VertexIndex,InstData.data[batchInstanceGUID]);
     nbl_glsl_barycentric_vert_set(modelPos);
-    gl_Position = nbl_glsl_pseudoMul4x4with3x1(self.MVP,modelPos);
+    gl_Position = self.MVP * vec4(modelPos, 1);
+
+    // self.MVP_Prev * inverse(self.MVP) * vec4(modelPos, 1);
+    // gl_Position = self.MVP * vec4(modelPos, 1);
+    
 }

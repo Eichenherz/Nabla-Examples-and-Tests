@@ -49,7 +49,7 @@ void main()
 
     const nbl_glsl_ext_Mitsuba_Loader_instance_data_t instanceData = InstData.data[batchInstanceGUID];
     const mat4x3 worldMatrix = instanceData.tform;
-    const mat4 MVP = nbl_glsl_pseudoMul4x4with4x3(pc.data.viewProjMatrix,worldMatrix);
+    const mat4 MVP      = nbl_glsl_pseudoMul4x4with4x3(pc.data.viewProjMatrix,worldMatrix);
 
     // cull
     bool notCulled = true;
@@ -66,7 +66,7 @@ void main()
         const uint drawInstanceID = commandBuff[pc.data.currentCommandBufferIx].draws[drawCommandGUID].baseInstance+
             atomicAdd(commandBuff[pc.data.currentCommandBufferIx].draws[drawCommandGUID].instanceCount,1u);
         
-        instanceDataPerCamera.data[drawInstanceID].MVP = MVP;
+        instanceDataPerCamera.data[drawInstanceID].MVP      = MVP;
         // use the MSB to denote if face orientation should be flipped
         instanceDataPerCamera.data[drawInstanceID].backfacingBit_batchInstanceGUID = batchInstanceGUID|((instanceData.determinantSignBit^floatBitsToUint(pc.data.viewProjDeterminant))&0x80000000u);
         instanceDataPerCamera.data[drawInstanceID].firstIndex = commandBuff[pc.data.currentCommandBufferIx].draws[drawCommandGUID].firstIndex;
