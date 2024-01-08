@@ -1,0 +1,13 @@
+
+include(common RESULT_VARIABLE RES)
+if(NOT RES)
+	message(FATAL_ERROR "common.cmake not found. Should be in {repo_root}/cmake directory")
+endif()
+
+nbl_create_executable_project(
+	../../src/nbl/ext/DebugDraw/CDraw3DLine.cpp
+	"" 
+	"${NBL_EXT_BULLET_INCLUDE_DIRS}" 
+	"${NBL_EXT_BULLET_LIB}"
+	"${NBL_EXECUTABLE_PROJECT_CREATION_PCH_TARGET}"
+)
