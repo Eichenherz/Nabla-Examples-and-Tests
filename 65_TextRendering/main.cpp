@@ -140,20 +140,16 @@ public:
 			assert(m_swapchainImageViews[i]);
 		}
 
-		const uint32_t descriptorPoolSizeCount = 1u;
-		video::IDescriptorPool::SDescriptorPoolSize poolSizes[descriptorPoolSizeCount];
-		poolSizes[0].type = asset::EDT_STORAGE_IMAGE;
-		poolSizes[0].count = 2u;
-
-		video::IDescriptorPool::E_CREATE_FLAGS descriptorPoolFlags =
+		video::IDescriptorPool::SCreateInfo poolCreateInfo = {};
+		poolCreateInfo.flags = 
 			static_cast<video::IDescriptorPool::E_CREATE_FLAGS>(0);
+		poolCreateInfo.maxSets = 1;
+		poolCreateInfo.maxDescriptorCount[static_cast<uint32_t>(asset::IDescriptor::E_TYPE::ET_STORAGE_IMAGE)] = 2;
 
 		core::smart_refctd_ptr<video::IDescriptorPool> descriptorPool
-			= logicalDevice->createDescriptorPool(descriptorPoolFlags, 1,
-				descriptorPoolSizeCount, poolSizes);
+			= logicalDevice->createDescriptorPool(std::move(poolCreateInfo));
 
-		m_descriptorSets[i] = logicalDevice->createDescriptorSet(descriptorPool.get(),
-			core::smart_refctd_ptr(m_descriptorSetLayout));
+		m_descriptorSets[i] = descriptorPool->createDescriptorSet(core::smart_refctd_ptr(m_descriptorSetLayout));
 
 		const uint32_t writeDescriptorCount = 2u;
 
@@ -162,45 +158,34 @@ public:
 
 		// image2D -- my input
 		{
-			descriptorInfos[0].image.imageLayout = asset::IImage::EL_GENERAL;
-			descriptorInfos[0].image.sampler = nullptr;
+			descriptorInfos[0].info.image.imageLayout = asset::IImage::EL_GENERAL;
+			descriptorInfos[0].info.image.sampler = nullptr;
 			descriptorInfos[0].desc = m_inImageView;
 
 			writeDescriptorSets[0].dstSet = m_descriptorSets[i].get();
 			writeDescriptorSets[0].binding = 1u;
 			writeDescriptorSets[0].arrayElement = 0u;
 			writeDescriptorSets[0].count = 1u;
-			writeDescriptorSets[0].descriptorType = asset::EDT_STORAGE_IMAGE;
+			writeDescriptorSets[0].descriptorType = asset::IDescriptor::E_TYPE::ET_STORAGE_IMAGE;
 			writeDescriptorSets[0].info = &descriptorInfos[0];
 		}
 
 		// image2D -- swapchain image
 		{
-			descriptorInfos[1].image.imageLayout = asset::IImage::EL_GENERAL;
-			descriptorInfos[1].image.sampler = nullptr;
+			descriptorInfos[1].info.image.imageLayout = asset::IImage::EL_GENERAL;
+			descriptorInfos[1].info.image.sampler = nullptr;
 			descriptorInfos[1].desc = m_swapchainImageViews[i]; // shouldn't IGPUDescriptorSet hold a reference to the resources in its descriptors?
 
 			writeDescriptorSets[1].dstSet = m_descriptorSets[i].get();
 			writeDescriptorSets[1].binding = 0u;
 			writeDescriptorSets[1].arrayElement = 0u;
 			writeDescriptorSets[1].count = 1u;
-			writeDescriptorSets[1].descriptorType = asset::EDT_STORAGE_IMAGE;
+			writeDescriptorSets[1].descriptorType = asset::IDescriptor::E_TYPE::ET_STORAGE_IMAGE;
 			writeDescriptorSets[1].info = &descriptorInfos[1];
 		}
 
 		logicalDevice->updateDescriptorSets(writeDescriptorCount, writeDescriptorSets, 0u, nullptr);
 		m_imageSwapchainIterations[i] = m_swapchainIteration;
-	}
-
-	void onResize(uint32_t w, uint32_t h) override
-	{
-		std::unique_lock guard(m_resizeLock);
-		windowWidth = w;
-		windowHeight = h;
-		CommonAPI::createSwapchain(std::move(logicalDevice), m_swapchainCreationParams, w, h, swapchain);
-		assert(swapchain);
-		m_swapchainIteration++;
-		m_resizeWaitForFrame.wait(guard);
 	}
 
 	void onAppInitialized_impl() override
@@ -220,7 +205,6 @@ public:
 		initParams.acceptableSurfaceFormats = acceptableSurfaceFormats.data();
 		initParams.acceptableSurfaceFormatCount = acceptableSurfaceFormats.size();
 		auto initOutput = CommonAPI::InitWithDefaultExt(std::move(initParams));
-		initParams.windowCb->setApplication(this);
 
 		system = std::move(initOutput.system);
 		window = std::move(initParams.window);
@@ -287,13 +271,13 @@ public:
 		video::IGPUDescriptorSetLayout::SBinding bindings[bindingCount];
 		{
 			bindings[0].binding = 0u;
-			bindings[0].type = asset::EDT_STORAGE_IMAGE;
+			bindings[0].type = asset::IDescriptor::E_TYPE::ET_STORAGE_IMAGE;
 			bindings[0].count = 1u;
 			bindings[0].stageFlags = asset::IShader::ESS_COMPUTE;
 			bindings[0].samplers = nullptr;
 
 			bindings[1].binding = 1u;
-			bindings[1].type = asset::EDT_STORAGE_IMAGE;
+			bindings[1].type = asset::IDescriptor::E_TYPE::ET_STORAGE_IMAGE;
 			bindings[1].count = 1u;
 			bindings[1].stageFlags = asset::IShader::ESS_COMPUTE;
 			bindings[1].samplers = nullptr;
@@ -348,12 +332,13 @@ public:
 			creationParams.arrayLayers = 1u;
 			creationParams.samples = asset::IImage::ESCF_1_BIT;
 			creationParams.tiling = video::IGPUImage::ET_OPTIMAL;
-			if (apiConnection->getAPIType() == video::EAT_VULKAN ||
-				apiConnection->getAPIType() == video::EAT_OPENGL_ES)
+			if (apiConnection->getAPIType() == video::EAT_VULKAN)
 			{
-				const auto& formatUsages = physicalDevice->getImageFormatUsagesOptimal(creationParams.format);
-				assert(formatUsages.storageImage);
-				assert(formatUsages.sampledImage);
+				const auto& formatUsages = physicalDevice->getImageFormatUsagesOptimalTiling();
+				auto storageAndSampled = video::IPhysicalDevice::SFormatImageUsages::SUsage(core::bitflag<asset::IImage::E_USAGE_FLAGS>(asset::IImage::EUF_STORAGE_BIT)
+					| asset::IImage::EUF_SAMPLED_BIT);
+
+				assert((formatUsages[creationParams.format] & storageAndSampled) == storageAndSampled);
 				assert(asset::isFloatingPointFormat(creationParams.format) || asset::isNormalizedFormat(creationParams.format));
 			}
 			creationParams.usage = core::bitflag(asset::IImage::EUF_STORAGE_BIT) | asset::IImage::EUF_TRANSFER_DST_BIT;
@@ -565,9 +550,5 @@ public:
 	}
 };
 
-//NBL_COMMON_API_MAIN(TextRenderingApp)
-int main(int argc, char** argv) {
-	CommonAPI::main<TextRenderingApp>(argc, argv);
-}
+NBL_MAIN_FUNC(TextRenderingApp)
 
-extern "C" {  _declspec(dllexport) DWORD NvOptimusEnablement = 0x00000001; }

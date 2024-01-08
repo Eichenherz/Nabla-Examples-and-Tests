@@ -7,4 +7,4 @@ set(EXAMPLE_SOURCES
 	../../src/nbl/ext/TextRendering/TextRendering.cpp
 )
 
-nbl_create_executable_project("${EXAMPLE_SOURCES}" "" "" "")
+nbl_create_executable_project("${EXAMPLE_SOURCES}" "" "" "" "${NBL_EXECUTABLE_PROJECT_CREATION_PCH_TARGET}")
