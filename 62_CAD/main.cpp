@@ -3,6 +3,7 @@
 
 #include "../common/CommonAPI.h"
 #include "nbl/ext/FullScreenTriangle/FullScreenTriangle.h"
+#include "nbl/ext/TextRendering/TextRendering.h"
 #include "nbl/core/SRange.h"
 #include "glm/glm/glm.hpp"
 #include <nbl/builtin/hlsl/cpp_compat.hlsl>
@@ -152,6 +153,7 @@ class CADApp : public ApplicationBase
 	core::smart_refctd_ptr<CommonAPI::InputSystem> inputSystem;
 	video::IGPUObjectFromAssetConverter cpu2gpu;
 	core::smart_refctd_ptr<video::IGPUImage> m_swapchainImages[CommonAPI::InitOutput::MaxSwapChainImageCount];
+	std::unique_ptr<msdfgen::Shape> m_bikeMsdfImage = nullptr;
 
 	int32_t m_resourceIx = -1;
 	uint32_t m_SwapchainImageIx = ~0u;
@@ -1152,6 +1154,283 @@ public:
 
 			if (hatchDebugStep > 0)
 			{
+				std::vector<std::vector<CPolyline>> shapes;
+				std::vector<CPolyline> polylines;
+				auto line = [&](float64_t2 begin, float64_t2 end) {
+					std::vector<float64_t2> points = {
+						begin, end
+					};
+					CPolyline polyline;
+					polyline.addLinePoints(core::SRange<float64_t2>(points.data(), points.data() + points.size()));
+					polylines.push_back(polyline);
+				};
+				{
+					// Checkered
+					line(float64_t2(4.0, 0.0), float64_t2(8.0, 0.0));
+					line(float64_t2(8.0, 0.0), float64_t2(8.0, 4.0));
+					line(float64_t2(0.0, 4.0), float64_t2(0.0, 8.0));
+					line(float64_t2(0.0, 8.0), float64_t2(4.0, 8.0));
+
+					line(float64_t2(0.0, 4.0), float64_t2(8.0, 4.0));
+					line(float64_t2(4.0, 0.0), float64_t2(4.0, 8.0));
+
+					std::vector<CPolyline> polylinesClone(polylines);
+					shapes.push_back(polylines);
+					polylines.clear();
+				}
+				{
+					// Diamonds
+					{
+						// Outer
+						std::vector<float64_t2> points = {
+							float64_t2(3.5, -0.5),
+							float64_t2(-0.5, 3.5),
+							float64_t2(3.5, 7.5),
+							float64_t2(7.5, 3.5),
+							float64_t2(3.5, -0.5),
+						};
+						CPolyline polyline;
+						polyline.addLinePoints(core::SRange<float64_t2>(points.data(), points.data() + points.size()));
+						polylines.push_back(polyline);
+					}
+					{
+						// Inner 
+						std::vector<float64_t2> points = {
+							float64_t2(3.5, 1.0),
+							float64_t2(1.0, 3.5),
+							float64_t2(3.5, 6.0),
+							float64_t2(6.0, 3.5),
+							float64_t2(3.5, 1.0)
+						};
+						CPolyline polyline;
+						polyline.addLinePoints(core::SRange<float64_t2>(points.data(), points.data() + points.size()));
+						polylines.push_back(polyline);
+					}
+
+					std::vector<CPolyline> polylinesClone(polylines);
+					shapes.push_back(polylines);
+					polylines.clear();
+				}
+				{
+					// Cross Hatch 
+					{
+						// Outer
+						std::vector<float64_t2> points = {
+							float64_t2(3.0, 0.0),
+							float64_t2(0.0, 3.0),
+							float64_t2(0.0, 5.0),
+							float64_t2(3.0, 8.0),
+							float64_t2(5.0, 8.0),
+							float64_t2(8.0, 5.0),
+							float64_t2(8.0, 3.0),
+							float64_t2(5.0, 0.0),
+							float64_t2(3.0, 0.0),
+						};
+						CPolyline polyline;
+						polyline.addLinePoints(core::SRange<float64_t2>(points.data(), points.data() + points.size()));
+						polylines.push_back(polyline);
+					}
+					{
+						// Inner 
+						std::vector<float64_t2> points = {
+							float64_t2(4.0, 1.0),
+							float64_t2(1.0, 4.0),
+							float64_t2(4.0, 7.0),
+							float64_t2(7.0, 4.0),
+							float64_t2(4.0, 1.0),
+						};
+						CPolyline polyline;
+						polyline.addLinePoints(core::SRange<float64_t2>(points.data(), points.data() + points.size()));
+						polylines.push_back(polyline);
+					}
+
+					std::vector<CPolyline> polylinesClone(polylines);
+					shapes.push_back(polylines);
+					polylines.clear();
+				}
+				{
+					// Hatch
+					{
+						std::vector<float64_t2> points = {
+							float64_t2(7.0, 0.0),
+							float64_t2(0.0, 7.0),
+							float64_t2(0.0, 8.0),
+							float64_t2(1.0, 8.0),
+							float64_t2(8.0, 1.0),
+							float64_t2(8.0, 0.0),
+							float64_t2(7.0, 0.0),
+						};
+						CPolyline polyline;
+						polyline.addLinePoints(core::SRange<float64_t2>(points.data(), points.data() + points.size()));
+						polylines.push_back(polyline);
+					}
+
+					std::vector<CPolyline> polylinesClone(polylines);
+					shapes.push_back(polylines);
+					polylines.clear();
+				}
+				{
+					// Horizontal 
+					{
+						std::vector<float64_t2> points = {
+							float64_t2(0.0, 0.0),
+							float64_t2(8.0, 0.0),
+							float64_t2(8.0, 1.0),
+							float64_t2(0.0, 1.0),
+							float64_t2(0.0, 0.0),
+						};
+						CPolyline polyline;
+						polyline.addLinePoints(core::SRange<float64_t2>(points.data(), points.data() + points.size()));
+						polylines.push_back(polyline);
+					}
+					{
+						std::vector<float64_t2> points = {
+							float64_t2(0.0, 4.0),
+							float64_t2(8.0, 4.0),
+							float64_t2(8.0, 5.0),
+							float64_t2(0.0, 5.0),
+							float64_t2(0.0, 4.0),
+						};
+						CPolyline polyline;
+						polyline.addLinePoints(core::SRange<float64_t2>(points.data(), points.data() + points.size()));
+						polylines.push_back(polyline);
+					}
+
+					std::vector<CPolyline> polylinesClone(polylines);
+					shapes.push_back(polylines);
+					polylines.clear();
+				}
+				{
+					// Vertical 
+					{
+						std::vector<float64_t2> points = {
+							float64_t2(0.0, 0.0),
+							float64_t2(0.0, 8.0),
+							float64_t2(1.0, 8.0),
+							float64_t2(1.0, 0.0),
+							float64_t2(0.0, 0.0),
+						};
+						CPolyline polyline;
+						polyline.addLinePoints(core::SRange<float64_t2>(points.data(), points.data() + points.size()));
+						polylines.push_back(polyline);
+					}
+					{
+						std::vector<float64_t2> points = {
+							float64_t2(4.0, 0.0),
+							float64_t2(4.0, 8.0),
+							float64_t2(5.0, 8.0),
+							float64_t2(5.0, 0.0),
+							float64_t2(4.0, 0.0),
+						};
+						CPolyline polyline;
+						polyline.addLinePoints(core::SRange<float64_t2>(points.data(), points.data() + points.size()));
+						polylines.push_back(polyline);
+					}
+
+					std::vector<CPolyline> polylinesClone(polylines);
+					shapes.push_back(polylines);
+					polylines.clear();
+				}
+				{
+					// Interwoven 
+					{
+						std::vector<float64_t2> points = {
+							float64_t2(0.0, 0.0),
+							float64_t2(1.0, 0.0),
+							float64_t2(4.0, 3.0),
+							float64_t2(4.0, 4.0),
+							float64_t2(3.0, 4.0),
+							float64_t2(0.0, 1.0),
+							float64_t2(0.0, 0.0),
+						};
+						CPolyline polyline;
+						polyline.addLinePoints(core::SRange<float64_t2>(points.data(), points.data() + points.size()));
+						polylines.push_back(polyline);
+					}
+					{
+						std::vector<float64_t2> points = {
+							float64_t2(7.0, 4.0),
+							float64_t2(8.0, 4.0),
+							float64_t2(8.0, 5.0),
+							float64_t2(5.0, 8.0),
+							float64_t2(4.0, 8.0),
+							float64_t2(4.0, 7.0),
+							float64_t2(7.0, 4.0),
+						};
+						CPolyline polyline;
+						polyline.addLinePoints(core::SRange<float64_t2>(points.data(), points.data() + points.size()));
+						polylines.push_back(polyline);
+					}
+
+					std::vector<CPolyline> polylinesClone(polylines);
+					shapes.push_back(polylines);
+					polylines.clear();
+				}
+				{
+					// Reverse Hatch 
+					{
+						std::vector<float64_t2> points = {
+							float64_t2(1.0, 0.0),
+							float64_t2(8.0, 7.0),
+							float64_t2(8.0, 8.0),
+							float64_t2(7.0, 8.0),
+							float64_t2(0.0, 1.0),
+							float64_t2(0.0, 0.0),
+							float64_t2(1.0, 0.0),
+						};
+						CPolyline polyline;
+						polyline.addLinePoints(core::SRange<float64_t2>(points.data(), points.data() + points.size()));
+						polylines.push_back(polyline);
+					}
+
+					std::vector<CPolyline> polylinesClone(polylines);
+					shapes.push_back(polylines);
+					polylines.clear();
+				}
+
+				// Hatch fill shapes described above
+				// Iterate each one of them, rendering
+				double hatchFillShapeSize = 128.0;
+				double hatchFillShapePadding = 64.0;
+				for (uint32_t hatchFillShapeIdx = 0; hatchFillShapeIdx < shapes.size(); hatchFillShapeIdx++)
+				{
+					double totalShapesWidth = hatchFillShapeSize * double(shapes.size()) + hatchFillShapePadding * double(shapes.size() - 1);
+					double offset = hatchFillShapeSize * double(hatchFillShapeIdx) + hatchFillShapePadding * double(hatchFillShapeIdx - 1);
+					// Center it
+					offset -= totalShapesWidth / 2.0;
+
+					std::vector<CPolyline> transformedPolylines;
+					for (uint32_t polylineIdx = 0; polylineIdx < polylines.size(); polylineIdx++)
+					{
+						auto& polyline = shapes[hatchFillShapeIdx][polylineIdx] ;
+						CPolyline transformedPolyline;
+						for (uint32_t sectorIdx = 0; sectorIdx < polyline.getSectionsCount(); sectorIdx++)
+						{
+							auto& section = polyline.getSectionInfoAt(sectorIdx);
+							if (section.type == ObjectType::LINE)
+							{
+								if (section.count == 0u) continue;
+
+								std::vector<float64_t2> points;
+								for (uint32_t i = section.index + 1; i < section.index + section.count + 1; i++)
+									points.push_back(polyline.getLinePointAt(i).p * hatchFillShapeSize + float64_t2(offset, -200.0));
+								transformedPolyline.addLinePoints(core::SRange<float64_t2>(points.data(), points.data() + points.size()));
+							}
+							else if (section.type == ObjectType::QUAD_BEZIER)
+							{
+								// TODO
+							}
+						}
+						transformedPolylines.push_back(transformedPolyline);
+					}
+
+					Hatch hatch(core::SRange<CPolyline>(transformedPolylines.data(), transformedPolylines.data() + transformedPolylines.size()), SelectedMajorAxis, hatchDebugStep, debug);
+					intendedNextSubmit = currentDrawBuffers.drawHatch(hatch, float32_t4(0.75, 0.75, 0.75, 1.0), UseDefaultClipProjectionIdx, submissionQueue, submissionFence, intendedNextSubmit);
+				}
+			}
+
+			if (hatchDebugStep > 0)
+			{
 #include "bike_hatch.h"
 				for (uint32_t i = 0; i < polylines.size(); i++)
 				{
@@ -1162,7 +1441,9 @@ public:
 					//intendedNextSubmit = currentDrawBuffers.drawPolyline(polylines[i], lineStyle, UseDefaultClipProjectionIdx, submissionQueue, submissionFence, intendedNextSubmit);
 				}
 				//printf("hatchDebugStep = %d\n", hatchDebugStep);
+
 				std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+
 				Hatch hatch(core::SRange<CPolyline>(polylines.data(), polylines.data() + polylines.size()), SelectedMajorAxis, hatchDebugStep, debug);
 				std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
 				// std::cout << "Hatch::Hatch time = " << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() << "[us]" << std::endl;
@@ -1218,7 +1499,6 @@ public:
 
 					polylines.push_back(polyline);
 				}
-
 				Hatch hatch(core::SRange<CPolyline>(polylines.data(), polylines.data() + polylines.size()), SelectedMajorAxis, hatchDebugStep, debug);
 				intendedNextSubmit = currentDrawBuffers.drawHatch(hatch, float32_t4(0.0, 1.0, 0.1, 1.0f), UseDefaultClipProjectionIdx, submissionQueue, submissionFence, intendedNextSubmit);
 			}
@@ -1290,6 +1570,7 @@ public:
 					beziers.push_back({ float64_t2(22.5, -20), float64_t2(35, -20), float64_t2(35, 0), });
 					beziers.push_back({ float64_t2(22.5, -20), float64_t2(10, -20), float64_t2(10, 0), });
 					line(float64_t2(35, 0), float64_t2(10, 0));
+
 
 					polyline.addQuadBeziers(nbl::core::SRange<shapes::QuadraticBezier<double>>(beziers.data(), beziers.data() + beziers.size()));
 				}
@@ -1406,6 +1687,92 @@ public:
 					polyline.addLinePoints(core::SRange<float64_t2>(points.data(), points.data() + points.size()));
 					polylines.push_back(polyline);
 				}
+
+				// Only do this once, otherwise everything blows up
+				if (!m_bikeMsdfImage) {
+					// MSDF gen test
+					msdfgen::Shape bikeGlyphShape;
+					nbl::ext::TextRendering::GlyphShapeBuilder glyphShapeBuilder(bikeGlyphShape);
+					for (uint32_t polylineIdx = 0; polylineIdx < polylines.size(); polylineIdx++)
+					{
+						auto& polyline = polylines[polylineIdx];
+						for (uint32_t sectorIdx = 0; sectorIdx < polyline.getSectionsCount(); sectorIdx++)
+						{
+							auto& section = polyline.getSectionInfoAt(sectorIdx);
+							if (section.type == ObjectType::LINE)
+							{
+								if (section.count == 0u) continue;
+
+								glyphShapeBuilder.moveTo(polyline.getLinePointAt(section.index).p);
+								for (uint32_t i = section.index + 1; i < section.index + section.count + 1; i++)
+									glyphShapeBuilder.lineTo(polyline.getLinePointAt(i).p);
+							}
+							else if (section.type == ObjectType::QUAD_BEZIER)
+							{
+								for (uint32_t objectIdx = section.index; objectIdx < section.index + section.count; objectIdx++)
+								{
+									auto bezierInfo = polyline.getQuadBezierInfoAt(objectIdx);
+									glyphShapeBuilder.moveTo(bezierInfo.shape.P0);
+									glyphShapeBuilder.quadratic(bezierInfo.shape.P1, bezierInfo.shape.P1);
+								}
+							}
+						}
+					}
+					glyphShapeBuilder.finish();
+					bikeGlyphShape.normalize();
+
+					msdfgen::Shape* shapePtr = new msdfgen::Shape;
+					*shapePtr = bikeGlyphShape;
+					m_bikeMsdfImage = std::unique_ptr<msdfgen::Shape>(shapePtr);
+				}
+				else
+				{
+					auto bikeGlyphShape = *m_bikeMsdfImage;
+					auto shapeBounds = bikeGlyphShape.getBounds();
+					uint32_t pixelSizes = 1;
+
+					uint32_t shapeBoundsW = shapeBounds.r - shapeBounds.l;
+					uint32_t shapeBoundsH = shapeBounds.t - shapeBounds.b;
+					uint32_t glyphW = shapeBoundsW * pixelSizes;
+					uint32_t glyphH = shapeBoundsH * pixelSizes;
+
+					video::IGPUBuffer::SCreationParams bufParams;
+					bufParams.size = glyphW * glyphH * 4;
+					bufParams.usage = asset::IBuffer::EUF_TRANSFER_SRC_BIT;
+					
+					// TODO: Merge with image_upload_utils and use uploadImageViaStagingBuffer 
+					auto data = logicalDevice->createBuffer(std::move(bufParams));
+					auto bufreqs = data->getMemoryReqs();
+					bufreqs.memoryTypeBits &= logicalDevice->getPhysicalDevice()->getUpStreamingMemoryTypeBits();
+					auto mem = logicalDevice->allocate(bufreqs, data.get());
+
+					video::IDeviceMemoryAllocation::MappedMemoryRange mappedMemoryRange(data->getBoundMemory(), 0u, glyphW * glyphH * 4);
+					logicalDevice->mapMemory(mappedMemoryRange, video::IDeviceMemoryAllocation::EMCAF_READ);
+
+					// Generate MSDF for the current mip and copy it
+					auto bufferCopyRegion = nbl::ext::TextRendering::TextRenderer::copyGlyphShapeToImage(data.get(), 0, glyphW, glyphH, bikeGlyphShape);
+				
+					// MSDF Image
+					video::IGPUImage::SCreationParams imgParams;
+					imgParams.type = asset::IImage::ET_2D;
+					imgParams.format = asset::EF_R8G8B8A8_UNORM;
+					imgParams.samples = asset::IImage::ESCF_1_BIT;
+					imgParams.extent.width = glyphW;
+					imgParams.extent.height = glyphH;
+					imgParams.extent.depth = 1;
+					imgParams.mipLevels = 1;
+					imgParams.arrayLayers = 1;
+					imgParams.usage = core::bitflag<asset::IImage::E_USAGE_FLAGS>(asset::IImage::EUF_TRANSFER_DST_BIT) | asset::IImage::EUF_SAMPLED_BIT;
+
+					auto msdfImage = logicalDevice->createImage(std::move(imgParams));
+
+					auto imgreqs = msdfImage->getMemoryReqs();
+					imgreqs.memoryTypeBits &= logicalDevice->getPhysicalDevice()->getDeviceLocalMemoryTypeBits();
+					logicalDevice->allocate(imgreqs, msdfImage.get());
+
+					cmdbuf->copyBufferToImage(data.get(), msdfImage.get(), asset::IImage::EL_TRANSFER_DST_OPTIMAL, 1, &bufferCopyRegion);
+				}
+
 				Hatch hatch(core::SRange<CPolyline>(polylines.data(), polylines.data() + polylines.size()), SelectedMajorAxis, hatchDebugStep, debug);
 				intendedNextSubmit = currentDrawBuffers.drawHatch(hatch, float32_t4(0.0, 0.0, 1.0, 1.0f), UseDefaultClipProjectionIdx, submissionQueue, submissionFence, intendedNextSubmit);
 			}

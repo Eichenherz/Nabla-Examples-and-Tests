@@ -12,6 +12,7 @@ set(EXAMPLE_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/Polyline.h"
   "${CMAKE_CURRENT_SOURCE_DIR}/DrawBuffers.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/DrawBuffers.h"
+	"../../src/nbl/ext/TextRendering/TextRendering.cpp"
 )
 set(EXAMPLE_INCLUDES
   "${CMAKE_CURRENT_SOURCE_DIR}/../../3rdparty/boost/superproject/libs/math/include")
