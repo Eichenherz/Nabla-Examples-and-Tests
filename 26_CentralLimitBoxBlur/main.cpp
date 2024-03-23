@@ -4,8 +4,8 @@
 
 
 // I've moved out a tiny part of this example into a shared header for reuse, please open and read it.
-#include "../common/BasicMultiQueueApplication.hpp"
-#include "../common/MonoAssetManagerAndBuiltinResourceApplication.hpp"
+#include "../common/SimpleWindowedApplication.hpp"
+#include <nbl/application_templates/MonoAssetManagerAndBuiltinResourceApplication.hpp>
 
 #include <nbl/builtin/hlsl/central_limit_blur/common.hlsl>
 #include "app_resources/descriptors.hlsl"
@@ -20,19 +20,17 @@ using namespace video;
 
 #define _NBL_PLATFORM_WINDOWS_
 
-class BoxBlurDemo final : public examples::BasicMultiQueueApplication, public examples::MonoAssetManagerAndBuiltinResourceApplication
+class BoxBlurDemo final : public examples::SimpleWindowedApplication, public application_templates::MonoAssetManagerAndBuiltinResourceApplication
 {
-	using base_t = examples::BasicMultiQueueApplication;
-	using asset_base_t = examples::MonoAssetManagerAndBuiltinResourceApplication;
+	using base_t = examples::SimpleWindowedApplication;
+	using asset_base_t = application_templates::MonoAssetManagerAndBuiltinResourceApplication;
+	using clock_t = std::chrono::steady_clock;
+
+	constexpr static inline clock_t::duration DisplayImageDuration = std::chrono::milliseconds( 900 );
 
 public:
-	BoxBlurDemo( 
-		const path& _localInputCWD, 
-		const path& _localOutputCWD, 
-		const path& _sharedInputCWD, 
-		const path& _sharedOutputCWD 
-	) : system::IApplicationFramework( _localInputCWD, _localOutputCWD, _sharedInputCWD, _sharedOutputCWD )
-	{}
+	BoxBlurDemo( const path& _localInputCWD, const path& _localOutputCWD, const path& _sharedInputCWD, const path& _sharedOutputCWD 
+	) : system::IApplicationFramework( _localInputCWD, _localOutputCWD, _sharedInputCWD, _sharedOutputCWD ) {}
 	
 	bool onAppInitialized( smart_refctd_ptr<ISystem>&& system ) override
 	{
@@ -46,14 +44,12 @@ public:
 			return false;
 		}
 
-		constexpr uint32_t WorkgroupSize = 256;
-		constexpr uint32_t PassesPerAxis = 4;
-
-		IAssetLoader::SAssetLoadParams lparams = {};
-		lparams.logger = m_logger.get();
-		lparams.workingDirectory = "";
+		
 		auto checkedLoad = [ & ]<class T>( const char* filePath ) -> smart_refctd_ptr<T>
 		{
+			IAssetLoader::SAssetLoadParams lparams = {};
+			lparams.logger = m_logger.get();
+			lparams.workingDirectory = "";
 			// The `IAssetManager::getAsset` function is very complex, in essencee it:
 			// 1. takes a cache key or an IFile, if you gave it an `IFile` skip to step 3
 			// 2. it consults the loader override about how to get an `IFile` from your cache key
@@ -120,8 +116,6 @@ public:
 			gpuImage->setObjectDebugName( name.data() );
 			return gpuImage;
 		};
-
-
 		smart_refctd_ptr<nbl::video::IGPUImage> gpuImg = createGPUImages( 
 			IImage::E_USAGE_FLAGS::EUF_SAMPLED_BIT /* | IImage::E_USAGE_FLAGS::EUF_STORAGE_BIT */, E_FORMAT::EF_R8G8B8A8_SRGB, "GPU Image");
 		const auto& gpuImgParams = gpuImg->getCreationParameters();
@@ -149,17 +143,31 @@ public:
 		}
 		assert( gpuImg && sampledView && unormView );
 
-		auto computeMain = checkedLoad.operator()< nbl::asset::ICPUShader >( "app_resources/main.comp.hlsl" );
-		smart_refctd_ptr<ICPUShader> overridenUnspecialized = CHLSLCompiler::createOverridenCopy(
-			computeMain.get(), "#define WORKGROUP_SIZE %s\n#define PASSES_PER_AXIS %d\n",
-			std::to_string( WorkgroupSize ).c_str(), PassesPerAxis );
-		smart_refctd_ptr<IGPUShader> shader = m_device->createShader( overridenUnspecialized.get() );
-		if( !shader )
+
+		constexpr uint32_t WorkgroupSize = 256; // TODO: Number of Passes as parameter
+		smart_refctd_ptr<IGPUShader> shader;
 		{
-			return logFail( "Creation of a GPU Shader to from CPU Shader source failed!" );
+			auto computeMain = checkedLoad.operator() < nbl::asset::ICPUShader > ( "app_resources/main.comp.hlsl" );
+			smart_refctd_ptr<ICPUShader> overridenUnspecialized = CHLSLCompiler::createOverridenCopy(
+				computeMain.get(), "#define WORKGROUP_SIZE %s\n", std::to_string( WorkgroupSize ).c_str() );
+			shader = m_device->createShader( overridenUnspecialized.get() );
+			if( !shader )
+			{
+				return logFail( "Creation of a GPU Shader to from CPU Shader source failed!" );
+			}
+		}
+		
+
+		// Now surface indep resources
+		m_semaphore = m_device->createSemaphore( m_submitIx );
+		if( !m_semaphore )
+		{
+			return logFail( "Failed to Create a Semaphore!" );
 		}
 
-		NBL_CONSTEXPR_STATIC nbl::video::IGPUDescriptorSetLayout::SBinding bindings[] = {
+		smart_refctd_ptr<IGPUDescriptorSetLayout> dsLayout;
+		{
+			NBL_CONSTEXPR_STATIC nbl::video::IGPUDescriptorSetLayout::SBinding bindings[] = {
 			{
 				.binding = inputViewBinding,
 				.type = nbl::asset::IDescriptor::E_TYPE::ET_COMBINED_IMAGE_SAMPLER,
@@ -176,13 +184,49 @@ public:
 				.count = 1,
 				.samplers = nullptr
 			}
-		};
-
-		smart_refctd_ptr<IGPUDescriptorSetLayout> dsLayout = m_device->createDescriptorSetLayout( bindings );
-		if( !dsLayout )
-		{
-			return logFail( "Failed to create a Descriptor Layout!\n" );
+			};
+			dsLayout = m_device->createDescriptorSetLayout( bindings );
+			if( !dsLayout )
+			{
+				return logFail( "Failed to create a Descriptor Layout!\n" );
+			}
 		}
+		
+		ISwapchain::SCreationParams swapchainParams = { .surface = m_surface->getSurface() };
+		// Need to choose a surface format
+		if( !swapchainParams.deduceFormat( m_physicalDevice ) )
+		{
+			return logFail( "Could not choose a Surface Format for the Swapchain!" );
+		}
+		
+		// Let's just use the same queue since there's no need for async present
+		if( !m_surface || !m_surface->init( getGraphicsQueue(), 0, swapchainParams.sharedParams ) )
+		{
+			return logFail( "Could not create Window & Surface or initialize the Surface!" );
+		}
+		m_maxFramesInFlight = m_surface->getMaxFramesInFlight();
+
+		{
+			const uint32_t setCount = m_maxFramesInFlight;
+			auto pool = m_device->createDescriptorPoolForDSLayouts( IDescriptorPool::E_CREATE_FLAGS::ECF_NONE, { &dsLayout.get(),1 }, &setCount );
+			if( !pool )
+			{
+				return logFail( "Failed to Create Descriptor Pool" );
+			}
+				
+			for( uint64_t i = 0u; i < m_maxFramesInFlight; ++i )
+			{
+				m_descriptorSets[ i ] = pool->createDescriptorSet( core::smart_refctd_ptr( dsLayout ) );
+				if( !m_descriptorSets[ i ] )
+				{
+					return logFail( "Could not create Descriptor Set!" );
+				}
+			}
+		}
+
+
+
+
 		const asset::SPushConstantRange pushConst[] = { {.stageFlags = IShader::ESS_COMPUTE, .offset = 0, .size = sizeof( nbl::hlsl::central_limit_blur::BoxBlurParams )} };
 		smart_refctd_ptr<nbl::video::IGPUPipelineLayout> pplnLayout = m_device->createPipelineLayout( pushConst, smart_refctd_ptr(dsLayout));
 		if( !pplnLayout )
@@ -201,6 +245,9 @@ public:
 				return logFail( "Failed to create pipelines (compile & link shaders)!\n" );
 			}
 		}
+
+
+
 		smart_refctd_ptr<video::IGPUSampler> sampler = m_device->createSampler( {} );
 		smart_refctd_ptr<nbl::video::IDescriptorPool> pool = m_device->createDescriptorPoolForDSLayouts( IDescriptorPool::ECF_NONE, { &dsLayout.get(),1 } );
 		smart_refctd_ptr<nbl::video::IGPUDescriptorSet> ds = pool->createDescriptorSet( std::move( dsLayout ) );
@@ -222,6 +269,8 @@ public:
 
 		ds->setObjectDebugName( "Box blur DS" );
 		pplnLayout->setObjectDebugName( "Box Blur PPLN Layout" );
+
+
 
 		// Transfer stage
 		const bool needsOwnershipTransfer = getTransferUpQueue()->getFamilyIndex()!=getComputeQueue()->getFamilyIndex();
@@ -264,10 +313,10 @@ public:
 
 			queue->startCapture();
 			IQueue::SSubmitInfo::SCommandBufferInfo cmdbufs[] = { {.cmdbuf = cmdbuf.get()} };
-			SIntendedSubmitInfo intendedSubmit = {
-				.frontHalf = {.queue = queue, .waitSemaphores = {/*wait for no - one*/}, .commandBuffers = cmdbufs }, .signalSemaphores = transferDone };
-			bool uploaded = m_utils->updateImageViaStagingBuffer(
-				intendedSubmit, textureToBlur->getBuffer(), inCpuTexInfo.format,
+			SIntendedSubmitInfo intendedSubmit = { .frontHalf = {.queue = queue, .waitSemaphores = {/*wait for no - one*/}, 
+				.commandBuffers = cmdbufs }, .signalSemaphores = transferDone };
+
+			bool uploaded = m_utils->updateImageViaStagingBuffer( intendedSubmit, textureToBlur->getBuffer(), inCpuTexInfo.format,
 				gpuImg.get(), IImage::LAYOUT::TRANSFER_DST_OPTIMAL, textureToBlur->getRegions()
 			);
 			if( !uploaded )
@@ -409,8 +458,55 @@ public:
 	// Just to run destructors in a nice order
 	bool onAppTerminated() override
 	{
+		getGraphicsQueue()->endCapture();
 		return base_t::onAppTerminated();
 	}
+
+	// Will get called mid-initialization, via `filterDevices` between when the API Connection is created and Physical Device is chosen
+	inline core::vector<video::SPhysicalDeviceFilter::SurfaceCompatibility> getSurfaces() const override
+	{
+		// So let's create our Window and Surface then!
+		if( !m_surface )
+		{
+			{
+				ui::IWindow::SCreationParams params = {};
+				params.callback = core::make_smart_refctd_ptr<nbl::video::ISimpleManagedSurface::ICallback>();
+				params.width = 512;
+				params.height = 512;
+				params.x = 32;
+				params.y = 32;
+				// Don't want to have a window lingering about before we're ready so create it hidden.
+				// Only programmatic resize, not regular.
+				params.flags = ui::IWindow::ECF_HIDDEN | ui::IWindow::ECF_BORDERLESS | ui::IWindow::ECF_RESIZABLE;
+				params.windowCaption = "ColorSpaceTestSampleApp";
+				const_cast< std::remove_const_t<decltype( m_window )>& >( m_window ) = m_winMgr->createWindow( std::move( params ) );
+			}
+			auto surface = CSurfaceVulkanWin32::create( smart_refctd_ptr( m_api ), smart_refctd_ptr_static_cast< ui::IWindowWin32 >( m_window ) );
+			const_cast< std::remove_const_t<decltype( m_surface )>& >( m_surface ) = nbl::video::CSimpleResizeSurface<nbl::video::CDefaultSwapchainFramebuffers>::create( std::move( surface ) );
+		}
+		if( m_surface )
+		{
+			return { {m_surface->getSurface()/*,EQF_NONE*/} };
+		}
+		return {};
+	}
+
+private:
+	smart_refctd_ptr<nbl::ui::IWindow> m_window;
+	smart_refctd_ptr<CSimpleResizeSurface<CDefaultSwapchainFramebuffers>> m_surface;
+	//
+	smart_refctd_ptr<IGPUGraphicsPipeline> m_pipeline;
+	// We can't use the same semaphore for acquire and present, because that would disable "Frames in Flight" by syncing previous present against next acquire.
+	smart_refctd_ptr<ISemaphore> m_semaphore;
+	// Use a separate counter to cycle through our resources for clarity
+	uint64_t m_submitIx : 59 = 0;
+	// Maximum frames which can be simultaneously rendered
+	uint64_t m_maxFramesInFlight : 5;
+	// Enough Command Buffers and other resources for all frames in flight!
+	std::array<smart_refctd_ptr<IGPUDescriptorSet>, ISwapchain::MaxImages> m_descriptorSets;
+	std::array<smart_refctd_ptr<IGPUCommandPool>, ISwapchain::MaxImages> m_cmdPools;
+	std::array<smart_refctd_ptr<IGPUCommandBuffer>, ISwapchain::MaxImages> m_cmdBufs;
+
 };
 
 
