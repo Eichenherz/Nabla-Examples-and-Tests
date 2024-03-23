@@ -1,6 +1,6 @@
 ﻿
 
-#include "../common/MonoAssetManagerAndBuiltinResourceApplication.hpp"
+#include "nbl/application_templates/MonoAssetManagerAndBuiltinResourceApplication.hpp"
 #include "../common/SimpleWindowedApplication.hpp"
 #include "../common/InputSystem.hpp"
 #include "nbl/video/utilities/CSimpleResizeSurface.h"
@@ -32,7 +32,7 @@ enum class ExampleMode
 	CASE_5, // Advanced Styling
 };
 
-constexpr ExampleMode mode = ExampleMode::CASE_2;
+constexpr ExampleMode mode = ExampleMode::CASE_5;
 
 using namespace nbl::hlsl;
 using namespace nbl;
@@ -130,9 +130,9 @@ private:
 class CEventCallback : public ISimpleManagedSurface::ICallback
 {
 public:
-	CEventCallback(nbl::core::smart_refctd_ptr<InputSystem>&& m_inputSystem, nbl::system::logger_opt_smart_ptr&& logger) : m_inputSystem(std::move(m_inputSystem)), m_logger(std::move(logger)), m_gotWindowClosedMsg(false){}
+	CEventCallback(nbl::core::smart_refctd_ptr<InputSystem>&& m_inputSystem, nbl::system::logger_opt_smart_ptr&& logger) : m_inputSystem(std::move(m_inputSystem)), m_logger(std::move(logger)){}
 	CEventCallback() {}
-	bool isWindowOpen() const {return !m_gotWindowClosedMsg;}
+	
 	void setLogger(nbl::system::logger_opt_smart_ptr& logger)
 	{
 		m_logger = logger;
@@ -143,13 +143,6 @@ public:
 	}
 private:
 		
-	bool onWindowClosed_impl() override
-	{
-		m_logger.log("Window closed");
-		m_gotWindowClosedMsg = true;
-		return true;
-	}
-
 	void onMouseConnected_impl(nbl::core::smart_refctd_ptr<nbl::ui::IMouseEventChannel>&& mch) override
 	{
 		m_logger.log("A mouse %p has been connected", nbl::system::ILogger::ELL_INFO, mch.get());
@@ -174,7 +167,6 @@ private:
 private:
 	nbl::core::smart_refctd_ptr<InputSystem> m_inputSystem = nullptr;
 	nbl::system::logger_opt_smart_ptr m_logger = nullptr;
-	bool m_gotWindowClosedMsg;
 };
 	
 class CSwapchainResources : public ISimpleManagedSurface::ISwapchainResources
@@ -245,10 +237,10 @@ class CSwapchainResources : public ISimpleManagedSurface::ISwapchainResources
 		std::array<core::smart_refctd_ptr<IGPUFramebuffer>,ISwapchain::MaxImages> m_framebuffers;
 };
 
-class ComputerAidedDesign final : public examples::SimpleWindowedApplication, public examples::MonoAssetManagerAndBuiltinResourceApplication
+class ComputerAidedDesign final : public examples::SimpleWindowedApplication, public application_templates::MonoAssetManagerAndBuiltinResourceApplication
 {
 	using device_base_t = examples::SimpleWindowedApplication;
-	using asset_base_t = examples::MonoAssetManagerAndBuiltinResourceApplication;
+	using asset_base_t = application_templates::MonoAssetManagerAndBuiltinResourceApplication;
 	using clock_t = std::chrono::steady_clock;
 	
 	constexpr static uint32_t WindowWidthRequest = 1600u;
@@ -338,13 +330,15 @@ public:
 	{		
 		const IGPURenderpass::SCreationParams::SColorAttachmentDescription colorAttachments[] = {
 			{{
-				.format = colorAttachmentFormat,
-				.samples = IGPUImage::ESCF_1_BIT,
-				.mayAlias = false,
-				.loadOp = loadOp,
-				.storeOp = IGPURenderpass::STORE_OP::STORE,
-				.initialLayout = initialLayout,
-				.finalLayout = finalLayout
+				{
+					.format = colorAttachmentFormat,
+					.samples = IGPUImage::ESCF_1_BIT,
+					.mayAlias = false
+				},
+				/*.loadOp = */loadOp,
+				/*.storeOp = */IGPURenderpass::STORE_OP::STORE,
+				/*.initialLayout = */initialLayout,
+				/*.finalLayout = */finalLayout
 			}},
 			IGPURenderpass::SCreationParams::ColorAttachmentsEnd
 		};
@@ -773,9 +767,9 @@ public:
 			return;
 
 		const IQueue::SSubmitInfo::SSemaphoreInfo acquired = {
-			.semaphore = m_surface->getAcquireSemaphore(),
-			.value = m_surface->getAcquireCount(),
-			.stageMask = asset::PIPELINE_STAGE_FLAGS::NONE // NONE for Acquire, right?
+			.semaphore = m_currentImageAcquire.semaphore,
+			.value = m_currentImageAcquire.acquireCount,
+			.stageMask = asset::PIPELINE_STAGE_FLAGS::NONE // NONE for Acquire, right? Yes, the Spec Says so!
 		};
 
 		// prev frame done using the scene data (is in post process stage)
@@ -822,8 +816,8 @@ public:
 		}
 		
 		// Acquire
-		m_currentAcquiredImageIdx = m_surface->acquireNextImage();
-		if (m_currentAcquiredImageIdx==ISwapchain::MaxImages)
+		m_currentImageAcquire = m_surface->acquireNextImage();
+		if (!m_currentImageAcquire)
 			return false;
 
 		const auto resourceIx = m_realFrameIx%m_framesInFlight;
@@ -908,8 +902,8 @@ public:
 			auto scRes = static_cast<CSwapchainResources*>(m_surface->getSwapchainResources());
 			const IGPUCommandBuffer::SClearColorValue clearValue = { .float32 = {0.f,0.f,0.f,0.f} };
 			beginInfo = {
-				.compatibleRenderpass = renderpassInitial,
-				.framebuffer = scRes->getFrambuffer(m_currentAcquiredImageIdx),
+				.renderpass = renderpassInitial.get(),
+				.framebuffer = scRes->getFrambuffer(m_currentImageAcquire.imageIndex),
 				.colorClearValues = &clearValue,
 				.depthStencilClearValues = nullptr,
 				.renderArea = currentRenderArea
@@ -918,6 +912,7 @@ public:
 
 		// you could do this later but only use renderpassInitial on first draw
 		cb->beginRenderPass(beginInfo, IGPUCommandBuffer::SUBPASS_CONTENTS::INLINE);
+		// Wait what's going on here? empty Renderpass!?
 		cb->endRenderPass();
 
 		return true;
@@ -1080,8 +1075,8 @@ public:
 			auto scRes = static_cast<CSwapchainResources*>(m_surface->getSwapchainResources());
 			const IGPUCommandBuffer::SClearColorValue clearValue = { .float32 = {0.f,0.f,0.f,0.f} };
 			beginInfo = {
-				.compatibleRenderpass = (inBetweenSubmit) ? renderpassInBetween : renderpassFinal,
-				.framebuffer = scRes->getFrambuffer(m_currentAcquiredImageIdx),
+				.renderpass = (inBetweenSubmit) ? renderpassInBetween.get():renderpassFinal.get(),
+				.framebuffer = scRes->getFrambuffer(m_currentImageAcquire.imageIndex),
 				.colorClearValues = &clearValue,
 				.depthStencilClearValues = nullptr,
 				.renderArea = currentRenderArea
@@ -1123,17 +1118,18 @@ public:
 		else
 		{
 			IQueue::SSubmitInfo submitInfo = static_cast<IQueue::SSubmitInfo>(intendedSubmitInfo);
-			submitInfo.signalSemaphores = { &submitInfo.signalSemaphores[1], 1u };
 			if (getGraphicsQueue()->submit({ &submitInfo, 1u }) == IQueue::RESULT::SUCCESS)
 			{
 				m_realFrameIx++;
+				intendedSubmitInfo.advanceScratchSemaphoreValue(); // last submits needs to also advance scratch sema value like overflowSubmit() does
+				
 				IQueue::SSubmitInfo::SSemaphoreInfo renderFinished =
 				{
 					.semaphore = m_renderSemaphore.get(),
 					.value = m_realFrameIx,
 					.stageMask = PIPELINE_STAGE_FLAGS::COLOR_ATTACHMENT_OUTPUT_BIT
 				};
-				m_surface->present(m_currentAcquiredImageIdx, { &renderFinished, 1u });
+				m_surface->present(m_currentImageAcquire.imageIndex, { &renderFinished, 1u });
 			}
 		}
 
@@ -2419,7 +2415,7 @@ protected:
 	// this is the semaphore info the overflows update the value for (the semaphore is set to the overflow semaphore above, and the value get's updated by SIntendedSubmitInfo)
 	IQueue::SSubmitInfo::SSemaphoreInfo m_overflowSubmitsScratchSemaphoreInfo;
 	
-	uint8_t m_currentAcquiredImageIdx = 0u;
+	ISimpleManagedSurface::SAcquireResult m_currentImageAcquire = {};
 
 	uint64_t m_realFrameIx : 59 = 0;
 	// Maximum frames which can be simultaneously rendered
